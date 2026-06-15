@@ -1146,6 +1146,54 @@ SECTION_LABELS = {
 }
 
 
+def cmd_undo(args):
+    data = load_data()
+
+    # Collect the last entry from every list section + next_task as candidates
+    LIST_SECTIONS = [
+        ("what_is_built",  "Done"),
+        ("in_progress",    "In Progress"),
+        ("decisions_made", "Decisions Made"),
+        ("bugs_fixed",     "Bugs Fixed"),
+        ("do_not_touch",   "Do Not Touch"),
+    ]
+
+    best_key   = None
+    best_label = None
+    best_at    = ""
+    best_text  = ""
+    best_is_nt = False
+
+    for key, label in LIST_SECTIONS:
+        items = data.get(key, [])
+        if not items:
+            continue
+        item = items[-1]
+        at   = entry_at(item)
+        text = entry_text(item)
+        if at >= best_at:
+            best_key, best_label, best_at, best_text, best_is_nt = key, label, at, text, False
+
+    nt = data.get("next_task", "")
+    if nt:
+        at   = entry_at(nt)
+        text = entry_text(nt)
+        if at >= best_at:
+            best_key, best_label, best_at, best_text, best_is_nt = "next_task", "Next Task", at, text, True
+
+    if best_key is None:
+        print("Nothing to undo.")
+        return
+
+    if best_is_nt:
+        data["next_task"] = ""
+    else:
+        data[best_key].pop()
+
+    save_data(data)
+    print(f"Undone [{best_label}]: {best_text}")
+
+
 def cmd_search(args):
     data  = load_data()
     query = args.query.lower()
@@ -1180,6 +1228,26 @@ def cmd_search(args):
         ts = f"  [{at}]" if at else ""
         print(f"  [{label}]{ts}")
         print(f"    {text}")
+
+
+def cmd_rename(args):
+    new_name = args.name.strip()
+    if not new_name:
+        print("Error: name cannot be empty.")
+        sys.exit(1)
+    data = load_data()
+    old_name = data.get("project_name", "")
+    data["project_name"] = new_name
+    save_data(data)
+    # Sync the registry entry for this folder
+    cwd = str(Path(os.getcwd()).resolve())
+    projects = load_registry()
+    for p in projects:
+        if str(Path(p["path"]).resolve()) == cwd:
+            p["name"] = new_name
+            break
+    save_registry(projects)
+    print(f"Renamed: '{old_name}' → '{new_name}'")
 
 
 def cmd_clear(args):
@@ -1375,6 +1443,13 @@ def main():
     p_export = sub.add_parser("export", help="Export project to a Markdown file")
     p_export.add_argument("path", nargs="?", help="Output path (default: reflections.md)")
     p_export.set_defaults(func=cmd_export)
+
+    p_undo = sub.add_parser("undo", help="Remove the most recently added entry")
+    p_undo.set_defaults(func=cmd_undo)
+
+    p_rename = sub.add_parser("rename", help="Rename this project and sync the registry")
+    p_rename.add_argument("name", help="New project name")
+    p_rename.set_defaults(func=cmd_rename)
 
     p_search = sub.add_parser("search", help="Search entries across all sections")
     p_search.add_argument("query", help="Text to search for (case-insensitive)")
