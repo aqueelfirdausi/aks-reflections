@@ -947,6 +947,39 @@ def cmd_bug(args):
     print(f"Bug fix logged: {text}")
 
 
+def cmd_inprogress(args):
+    text = args.text.strip()
+    if not text:
+        print("Error: description cannot be empty.")
+        sys.exit(1)
+    data = load_data()
+    data["in_progress"].append(make_entry(text))
+    save_data(data)
+    print(f"Logged as in progress: {text}")
+
+
+def cmd_decision(args):
+    text = args.text.strip()
+    if not text:
+        print("Error: description cannot be empty.")
+        sys.exit(1)
+    data = load_data()
+    data["decisions_made"].append(make_entry(text))
+    save_data(data)
+    print(f"Decision logged: {text}")
+
+
+def cmd_donttouch(args):
+    text = args.text.strip()
+    if not text:
+        print("Error: description cannot be empty.")
+        sys.exit(1)
+    data = load_data()
+    data["do_not_touch"].append(make_entry(text))
+    save_data(data)
+    print(f"Logged as do not touch: {text}")
+
+
 def cmd_next(args):
     text = args.text.strip()
     if not text:
@@ -1094,6 +1127,158 @@ def cmd_unregister(args):
         print(f"Unregistered: {cwd}")
 
 
+SECTION_MAP = {
+    "done":       "what_is_built",
+    "bugs":       "bugs_fixed",
+    "inprogress": "in_progress",
+    "decisions":  "decisions_made",
+    "donttouch":  "do_not_touch",
+    "next":       "next_task",
+}
+
+SECTION_LABELS = {
+    "what_is_built":  "Done",
+    "bugs_fixed":     "Bugs Fixed",
+    "in_progress":    "In Progress",
+    "decisions_made": "Decisions Made",
+    "do_not_touch":   "Do Not Touch",
+    "next_task":      "Next Task",
+}
+
+
+def cmd_search(args):
+    data  = load_data()
+    query = args.query.lower()
+
+    sections = [
+        ("what_is_built",  "Done"),
+        ("in_progress",    "In Progress"),
+        ("decisions_made", "Decisions Made"),
+        ("bugs_fixed",     "Bugs Fixed"),
+        ("do_not_touch",   "Do Not Touch"),
+    ]
+
+    hits = []
+    for key, label in sections:
+        for item in data.get(key, []):
+            text = entry_text(item)
+            if query in text.lower():
+                hits.append((label, entry_at(item), text))
+
+    nt = data.get("next_task", "")
+    if nt:
+        text = entry_text(nt)
+        if query in text.lower():
+            hits.append(("Next Task", entry_at(nt), text))
+
+    if not hits:
+        print(f"No results for '{args.query}'.")
+        return
+
+    print(f"{len(hits)} result{'s' if len(hits) != 1 else ''} for '{args.query}':\n")
+    for label, at, text in hits:
+        ts = f"  [{at}]" if at else ""
+        print(f"  [{label}]{ts}")
+        print(f"    {text}")
+
+
+def cmd_clear(args):
+    data = load_data()
+
+    if args.all:
+        if not args.confirm:
+            print("This will erase all entries in every section.")
+            print("Re-run with --confirm to proceed:")
+            print("  python aks_reflections.py clear --all --confirm")
+            sys.exit(1)
+        cleared = []
+        for key in ("what_is_built", "in_progress", "decisions_made", "bugs_fixed", "do_not_touch"):
+            count = len(data.get(key, []))
+            if count:
+                cleared.append(f"  {SECTION_LABELS[key]} ({count} entries)")
+            data[key] = []
+        if data.get("next_task"):
+            cleared.append("  Next Task")
+        data["next_task"] = ""
+        save_data(data)
+        if cleared:
+            print("Cleared:")
+            print("\n".join(cleared))
+        else:
+            print("Nothing to clear — all sections already empty.")
+        return
+
+    if not args.section:
+        print("Specify a section to clear, or use --all --confirm to wipe everything.")
+        print("Sections: done, bugs, inprogress, decisions, donttouch, next")
+        sys.exit(1)
+
+    key = SECTION_MAP.get(args.section.lower())
+    if not key:
+        print(f"Unknown section '{args.section}'. Choose from: {', '.join(SECTION_MAP)}")
+        sys.exit(1)
+
+    label = SECTION_LABELS[key]
+    if key == "next_task":
+        if not data.get("next_task"):
+            print(f"{label} is already empty.")
+        else:
+            data["next_task"] = ""
+            save_data(data)
+            print(f"Cleared: {label}")
+    else:
+        count = len(data.get(key, []))
+        if count == 0:
+            print(f"{label} is already empty.")
+        else:
+            data[key] = []
+            save_data(data)
+            print(f"Cleared: {label} ({count} entr{'y' if count == 1 else 'ies'} removed)")
+
+
+def cmd_export(args):
+    data = load_data()
+    name    = data.get("project_name", "unknown")
+    updated = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    lines = [f"# {name}", f"*Exported on {updated}*", ""]
+
+    def md_section(heading, items):
+        lines.append(f"## {heading}")
+        if items:
+            for item in items:
+                at   = entry_at(item)
+                text = entry_text(item)
+                ts   = f"`{at}` " if at else ""
+                lines.append(f"- {ts}{text}")
+        else:
+            lines.append("- *(none)*")
+        lines.append("")
+
+    md_section("✅ Done",  data.get("what_is_built",  []))
+    md_section("🐛 Bugs",  data.get("bugs_fixed",     []))
+    md_section("🔄 In Progress", data.get("in_progress", []))
+    md_section("🧠 Decisions",   data.get("decisions_made", []))
+    md_section("🚫 Do Not Touch", data.get("do_not_touch", []))
+
+    lines.append("## 🔜 Next")
+    nt = data.get("next_task", "")
+    if nt:
+        at   = entry_at(nt)
+        text = entry_text(nt)
+        ts   = f"`{at}` " if at else ""
+        lines.append(f"- {ts}{text}")
+    else:
+        lines.append("- *(none)*")
+    lines.append("")
+
+    raw_path = args.path if args.path else "reflections.md"
+    out_path = Path(os.path.expanduser(raw_path)).resolve()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"Exported to {out_path}")
+
+
 def cmd_serve(args):
     if not os.path.exists(AKS_FILE):
         print(f"Error: {AKS_FILE} not found. Run 'aks-reflections init' first.")
@@ -1148,6 +1333,18 @@ def main():
     p_bug.add_argument("text", help="What was fixed")
     p_bug.set_defaults(func=cmd_bug)
 
+    p_inprogress = sub.add_parser("inprogress", help="Log something as in progress")
+    p_inprogress.add_argument("text", help="What you are working on")
+    p_inprogress.set_defaults(func=cmd_inprogress)
+
+    p_decision = sub.add_parser("decision", help="Log a decision made")
+    p_decision.add_argument("text", help="What was decided")
+    p_decision.set_defaults(func=cmd_decision)
+
+    p_donttouch = sub.add_parser("donttouch", help="Mark something as do not touch")
+    p_donttouch.add_argument("text", help="What to leave alone")
+    p_donttouch.set_defaults(func=cmd_donttouch)
+
     p_next = sub.add_parser("next", help="Set the next task")
     p_next.add_argument("text", help="What to do next")
     p_next.set_defaults(func=cmd_next)
@@ -1174,6 +1371,21 @@ def main():
     p_switch = sub.add_parser("switch", help="Find a registered project path by name")
     p_switch.add_argument("name", help="Project name (partial match works)")
     p_switch.set_defaults(func=cmd_switch)
+
+    p_export = sub.add_parser("export", help="Export project to a Markdown file")
+    p_export.add_argument("path", nargs="?", help="Output path (default: reflections.md)")
+    p_export.set_defaults(func=cmd_export)
+
+    p_search = sub.add_parser("search", help="Search entries across all sections")
+    p_search.add_argument("query", help="Text to search for (case-insensitive)")
+    p_search.set_defaults(func=cmd_search)
+
+    p_clear = sub.add_parser("clear", help="Clear a section or all entries")
+    p_clear.add_argument("section", nargs="?",
+                         help="Section to clear: done, bugs, inprogress, decisions, donttouch, next")
+    p_clear.add_argument("--all",     action="store_true", help="Clear every section")
+    p_clear.add_argument("--confirm", action="store_true", help="Required with --all")
+    p_clear.set_defaults(func=cmd_clear)
 
     args = parser.parse_args()
     args.func(args)
